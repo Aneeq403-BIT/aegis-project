@@ -1,0 +1,53 @@
+-- 1. THE USER DATA (The Target)
+CREATE TABLE users (
+    user_id SERIAL PRIMARY KEY,
+    full_name TEXT,
+    email TEXT,
+    phone TEXT,
+    status TEXT DEFAULT 'ACTIVE'
+);
+
+-- 2. TRANSACTION HISTORY (Must remain after deletion)
+CREATE TABLE orders (
+    order_id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES users(user_id),
+    amount DECIMAL(10,2),
+    shipping_address TEXT -- PII: Needs cleaning
+);
+
+-- 3. THE "BRAIN" (Privacy Catalog)
+-- This defines HOW we handle specific data types
+CREATE TABLE privacy_catalog (
+    catalog_id SERIAL PRIMARY KEY,
+    table_name TEXT,
+    column_name TEXT,
+    strategy TEXT -- 'HASH', 'REDACT', 'NULLIFY'
+);
+
+-- 4. INSERT FAKE DATA
+INSERT INTO users (full_name, email, phone) VALUES 
+('John Wick', 'john@continental.com', '555-0100'),
+('Aneeq','ane@google.com','666-100');
+
+INSERT INTO orders (user_id, amount, shipping_address) VALUES 
+(2, 500.00, '123 Continental Hotel, NY'),
+(1, 1200.00, '123 Continental Hotel, NY');
+
+-- 5. CONFIGURE THE RULES
+INSERT INTO privacy_catalog (table_name, column_name, strategy) VALUES 
+('users', 'full_name', 'REDACT'),
+('users', 'email', 'HASH'),
+('users', 'phone', 'NULLIFY'),
+('orders', 'shipping_address', 'REDACT');
+
+CREATE TABLE audit_logs (
+    log_id SERIAL PRIMARY KEY,
+    target_db TEXT,
+    target_table TEXT,
+    target_pk_id INT,
+    columns_cleaned TEXT,
+    executed_at TIMESTAMP DEFAULT NOW(),
+    status TEXT
+);
+
+select * from audit_logs;

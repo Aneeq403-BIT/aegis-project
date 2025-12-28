@@ -14,13 +14,16 @@ export default function App() {
   const [listIds, setListIds] = useState('')
   
   const [targetIds, setTargetIds] = useState([]) 
-  const [targetDetails, setTargetDetails] = useState([]) // NEW: Stores actual row data
+  const [targetDetails, setTargetDetails] = useState([])
   const [loading, setLoading] = useState(false)
   const [log, setLog] = useState([])
 
-  const getIdCol = () => schema[selectedTable] ? schema[selectedTable][0].name : '';
+  const getPkCol = () => {
+      if (!schema || !selectedTable) return '';
+      const pk = schema[selectedTable].primary_key;
+      return pk !== "UNKNOWN" ? pk : schema[selectedTable].columns[0].name;
+  }
 
-  // 1. CONNECT
   const handleConnect = async () => {
     if(!dbCreds.db_name) { alert("Enter DB Name"); return; }
     setLoading(true)
@@ -37,100 +40,60 @@ export default function App() {
     setLoading(false)
   }
 
-// 2. PREPARE & FETCH PREVIEW (DEBUGGED VERSION)
   const handlePrepare = async () => {
-    // FIX 1: Alert if table is missing instead of failing silently
-    if (!selectedTable) { 
-        alert("⚠️ Please select a Target Table from the dropdown first."); 
-        return; 
-    }
-
+    if (!selectedTable) { alert("Select Table"); return; }
     let ids = [];
 
-    // LOGIC: Calculate IDs based on Mode
-    try {
-        if (mode === 'SINGLE') {
-            if (!singleId) { alert("Please enter an ID."); return; }
-            ids.push(parseInt(singleId));
-        } 
-        else if (mode === 'RANGE') {
-            const start = parseInt(rangeStart);
-            const end = parseInt(rangeEnd);
-            if (isNaN(start) || isNaN(end)) { alert("Please enter valid numbers for Start and End."); return; }
-            if (start > end) { alert("Start ID cannot be greater than End ID."); return; }
-            
-            // Limit range to prevent browser crash
-            if ((end - start) > 1000) { alert("Range too large. Max 1000 records at a time."); return; }
-            
-            for (let i = start; i <= end; i++) ids.push(i);
-        } 
-        else if (mode === 'LIST') {
-            if (!listIds.trim()) { alert("Please enter a list of IDs (e.g., 1, 5, 10)."); return; }
-            
-            // FIX 2: Better parsing for List Mode
-            ids = listIds.split(',')
-                .map(x => x.trim())       // Remove spaces
-                .filter(x => x !== '')    // Remove empty strings
-                .map(x => parseInt(x))    // Convert to Integer
-                .filter(x => !isNaN(x));  // Remove non-numbers
-        }
-    } catch (err) {
-        alert("Error parsing inputs: " + err.message);
-        return;
+    if (mode === 'SINGLE') {
+        if (!singleId) { alert("Enter ID"); return; }
+        ids.push(singleId.trim());
+    } 
+    else if (mode === 'RANGE') {
+        const start = parseInt(rangeStart);
+        const end = parseInt(rangeEnd);
+        if (isNaN(start) || isNaN(end)) { alert("Range mode requires Integer IDs"); return; }
+        if ((end - start) > 1000) { alert("Max 1000 records"); return; }
+        for (let i = start; i <= end; i++) ids.push(String(i));
+    } 
+    else if (mode === 'LIST') {
+        ids = listIds.split(',').map(x => x.trim()).filter(x => x !== '');
     }
 
-    // FIX 3: Check if IDs array is empty after parsing
-    if (ids.length === 0) { 
-        alert("No valid IDs found. Please check your input format."); 
-        return; 
-    }
+    if (ids.length === 0) { alert("No valid IDs"); return; }
     
-    console.log("Requesting IDs:", ids); // Debugging Log (Check F12 Console)
     setLoading(true)
-    
-    // NEW: Fetch Actual Data for these IDs
     try {
         const res = await fetch('http://127.0.0.1:8000/fetch-batch-details', {
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 connection: dbCreds,
                 table_name: selectedTable,
-                primary_key_col: getIdCol(),
+                primary_key_col: getPkCol(),
                 target_ids: ids
             })
         })
-        
-        if (!res.ok) {
-            throw new Error(`Server Error: ${res.status}`);
-        }
-
         const data = await res.json()
         
         if (data && data.length > 0) {
             setTargetIds(ids)
-            setTargetDetails(data) // Store details for display
+            setTargetDetails(data)
             setStep(3)
-            setLog(p => [...p, `🔍 Retrieved ${data.length} records for preview`])
+            setLog(p => [...p, `🔍 Retrieved ${data.length} records`])
         } else {
-            alert(`No records found. The IDs [${ids.join(', ')}] do not exist in table '${selectedTable}'.`)
+            alert(`No records found using PK '${getPkCol()}'`)
         }
-    } catch (e) { 
-        alert("Fetch Error: " + e.message);
-        console.error(e);
-    }
-    
+    } catch (e) { alert(e.message) }
     setLoading(false)
   }
 
-  // 3. EXECUTE
   const handleExecute = async () => {
-    if(!confirm(`WARNING: About to anonymize ${targetIds.length} records. Proceed?`)) return;
+    if(!confirm(`Proceed with erasure of ${targetIds.length} records?`)) return;
 
     setLoading(true)
-    const idCol = getIdCol();
+    const pkCol = getPkCol();
     
-    const colsToClean = schema[selectedTable]
+    // Note: Schema structure is schema[table].columns
+    const colsToClean = schema[selectedTable].columns
       .filter(col => col.suggested_strategy === 'HASH')
       .map(col => ({ col: col.name, strategy: 'HASH' }))
 
@@ -140,29 +103,23 @@ export default function App() {
           body: JSON.stringify({
             connection: dbCreds,
             target_table: selectedTable,
-            target_id_col: idCol,
+            target_id_col: pkCol,
             target_ids: targetIds,
             columns_to_clean: colsToClean
           })
         })
 
         if (res.ok) {
-          // DOWNLOAD FILE (ZIP or PDF)
           const blob = await res.blob();
           const url = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          // Determine extension based on count
-          a.download = targetIds.length === 1 ? `Certificate_ID_${targetIds[0]}.pdf` : `AEGIS_Batch.zip`;
+          a.download = targetIds.length === 1 ? `Certificate_${targetIds[0]}.pdf` : `AEGIS_Batch.zip`;
           document.body.appendChild(a);
           a.click();
           a.remove();
-
           setStep(4)
-          setLog(p => [...p, `💀 PROTOCOL EXECUTED`, `📄 Evidence Downloaded`])
-        } else {
-            alert("Server Error")
-        }
+        } else { alert("Server Error") }
     } catch (e) { alert(e.message) }
     setLoading(false)
   }
@@ -175,8 +132,8 @@ export default function App() {
         <div className="col-span-1 space-y-6">
             <div className="border-b border-slate-700 pb-6 flex flex-col items-center text-center">
             <img src={logo} alt="Aegis Logo" className="w-24 h-24 mb-4 object-contain drop-shadow-[0_0_10px_rgba(6,182,212,0.5)]" />
-            <h1 className="text-3xl font-black tracking-tight text-white">AEGIS <span className="text-purple-500">v2.5</span></h1>
-            <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Bulk Operations Module</p>
+            <h1 className="text-3xl font-black tracking-tight text-white">AEGIS <span className="text-cyan-500">v2.6</span></h1>
+            <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Deep Scan Engine</p>
           </div>
           
           <div className="bg-black/50 rounded border border-slate-800 p-2 font-mono text-[10px] h-48 overflow-y-auto">
@@ -205,12 +162,12 @@ export default function App() {
           
           {step < 2 && (
             <div className="flex flex-col items-center justify-center flex-grow text-slate-600 opacity-50">
-                <div className="text-8xl mb-6 grayscale opacity-20">📚</div>
-                <div className="text-2xl font-bold uppercase">Batch Processing Ready</div>
+                <div className="text-8xl mb-6 grayscale opacity-20">🧠</div>
+                <div className="text-2xl font-bold uppercase">Deep Scan Engine Ready</div>
             </div>
           )}
 
-          {/* STEP 2: SELECTION MODE */}
+          {/* STEP 2: SELECTION */}
           {step === 2 && (
              <div className="animate-in slide-in-from-right duration-300">
                 <h2 className="text-3xl font-bold text-white mb-6">Target Configuration</h2>
@@ -222,13 +179,18 @@ export default function App() {
                         <option value="">Select Table...</option>
                         {schema && Object.keys(schema).map(t => <option key={t} value={t}>{t}</option>)}
                     </select>
+                    {selectedTable && (
+                        <div className="text-xs text-green-400 mt-2 font-mono">
+                            Detected PK Column: <span className="font-bold border border-green-600 px-1 rounded">{getPkCol()}</span>
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex gap-2 mb-6 border-b border-slate-700">
                     {['SINGLE', 'RANGE', 'LIST'].map(m => (
                         <button key={m} onClick={() => setMode(m)} 
                             className={`px-4 py-2 text-sm font-bold ${mode === m ? 'text-purple-400 border-b-2 border-purple-400' : 'text-slate-500'}`}>
-                            {m} ENTRY
+                            {m}
                         </button>
                     ))}
                 </div>
@@ -236,19 +198,19 @@ export default function App() {
                 <div className="bg-slate-900 p-6 rounded border border-slate-700 mb-6">
                     {mode === 'SINGLE' && (
                         <input className="w-full bg-slate-800 border border-slate-600 rounded p-3 text-white" 
-                            placeholder="Enter Single ID..." value={singleId} onChange={e => setSingleId(e.target.value)} />
+                            placeholder="Enter ID..." value={singleId} onChange={e => setSingleId(e.target.value)} />
                     )}
                     {mode === 'RANGE' && (
                         <div className="flex gap-4">
                             <input className="w-1/2 bg-slate-800 border border-slate-600 rounded p-3 text-white" 
-                                placeholder="Start ID (e.g. 1)" value={rangeStart} onChange={e => setRangeStart(e.target.value)} />
+                                placeholder="Start Int" value={rangeStart} onChange={e => setRangeStart(e.target.value)} />
                             <input className="w-1/2 bg-slate-800 border border-slate-600 rounded p-3 text-white" 
-                                placeholder="End ID (e.g. 100)" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} />
+                                placeholder="End Int" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} />
                         </div>
                     )}
                     {mode === 'LIST' && (
                         <input className="w-full bg-slate-800 border border-slate-600 rounded p-3 text-white" 
-                            placeholder="IDs (e.g. 1, 5, 12)" value={listIds} onChange={e => setListIds(e.target.value)} />
+                            placeholder="e.g. user_01, user_02" value={listIds} onChange={e => setListIds(e.target.value)} />
                     )}
                 </div>
 
@@ -258,43 +220,72 @@ export default function App() {
              </div>
           )}
 
-          {/* STEP 3: PREVIEW (NEW SCROLLABLE LIST) */}
+          {/* STEP 3: PREVIEW TABLE (UPDATED WITH REASONING) */}
           {step === 3 && (
             <div className="animate-in fade-in zoom-in duration-300 flex flex-col h-full">
                 <div className="flex justify-between items-end mb-6">
-                    <h2 className="text-3xl font-bold text-white">Batch Confirmation</h2>
+                    <h2 className="text-3xl font-bold text-white">Analysis & Preview</h2>
                     <div className="text-xs text-purple-400 border border-purple-500 px-3 py-1 rounded bg-purple-900/20">
-                        {targetDetails.length} RECORDS FOUND
+                        {targetDetails.length} RECORDS SELECTED
                     </div>
                 </div>
 
-                {/* SCROLLABLE DATA PREVIEW */}
-                <div className="flex-grow bg-slate-900 rounded border border-slate-700 mb-6 overflow-hidden flex flex-col max-h-[400px]">
-                    <div className="bg-black/50 p-3 text-xs uppercase font-bold text-slate-400 border-b border-slate-700">
-                        Data Snapshot (Pre-Erasure)
+                {/* THE TABLE VIEW */}
+                <div className="bg-slate-900 rounded border border-slate-600 mb-6 overflow-hidden">
+                    <div className="bg-black/50 p-2 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-700 text-center">
+                        Simulating Protocol on First Record (ID: {targetDetails[0][getPkCol()]})
                     </div>
-                    <div className="overflow-y-auto p-4 space-y-3">
-                        {targetDetails.map((row, idx) => (
-                            <div key={idx} className="bg-slate-800/50 p-3 rounded border border-slate-700/50 flex flex-col text-sm">
-                                <div className="flex justify-between text-slate-500 text-xs mb-1">
-                                    <span>#{idx+1}</span>
-                                    <span>ID: {row[getIdCol()]}</span>
-                                </div>
-                                <div className="text-white font-mono break-all">
-                                    {/* Show the first 3 relevant fields like Name/Email */}
-                                    {Object.entries(row).slice(1, 4).map(([k, v]) => (
-                                        <span key={k} className="mr-4"><span className="text-purple-400">{k}:</span> {v}</span>
-                                    ))}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                    <table className="w-full text-left text-sm">
+                        <thead className="bg-slate-950 text-slate-400 text-[10px] uppercase">
+                            <tr>
+                                <th className="p-3">Column</th>
+                                <th className="p-3">Sample Data</th>
+                                <th className="p-3">AI Strategy & Reason</th>
+                                <th className="p-3">Result</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800 font-mono text-xs">
+                            {schema[selectedTable].columns.map((col) => {
+                                // Get value from the first record in the batch
+                                const val = targetDetails[0][col.name];
+                                const action = col.suggested_strategy;
+                                
+                                return (
+                                    <tr key={col.name} className={action === 'HASH' ? 'bg-red-900/10' : ''}>
+                                        <td className="p-3 text-slate-400">{col.name}</td>
+                                        <td className="p-3 text-white max-w-xs truncate">{val}</td>
+                                        
+                                        {/* --- THIS IS THE TD YOU WANTED --- */}
+                                        <td className="p-3">
+                                            {action === 'HASH' && (
+                                                <div className="flex flex-col">
+                                                    <span className="text-[10px] font-bold bg-red-600 text-white px-2 py-1 rounded w-fit">ERASE (PII)</span>
+                                                    <span className="text-[9px] text-red-300 mt-1 italic">{col.reason}</span>
+                                                </div>
+                                            )}
+                                            {action === 'PRESERVE' && (
+                                                <div className="flex flex-col">
+                                                    <span className="text-[10px] font-bold bg-green-600 text-white px-2 py-1 rounded w-fit">PRESERVE</span>
+                                                    <span className="text-[9px] text-green-300 mt-1 italic">{col.reason}</span>
+                                                </div>
+                                            )}
+                                            {action === 'IGNORE' && <span className="text-[10px] text-slate-600 border border-slate-700 px-2 py-1 rounded">IGNORE</span>}
+                                        </td>
+                                        
+                                        <td className="p-3">
+                                            {action === 'HASH' ? <span className="text-red-400 blur-[2px]">HASHED_VALUE</span> : <span className="text-slate-600">NO CHANGE</span>}
+                                        </td>
+                                    </tr>
+                                )
+                            })}
+                        </tbody>
+                    </table>
                 </div>
 
                 <div className="flex gap-4 mt-auto">
                     <button onClick={() => setStep(2)} className="px-8 py-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold">Back</button>
                     <button onClick={handleExecute} className="px-8 py-4 rounded bg-red-600 hover:bg-red-500 text-white font-bold flex-1 shadow-[0_0_20px_rgba(220,38,38,0.5)]">
-                        COMMIT ERASURE
+                        COMMIT PROTOCOL
                     </button>
                 </div>
             </div>
@@ -303,14 +294,11 @@ export default function App() {
           {/* STEP 4: SUCCESS */}
           {step === 4 && (
             <div className="text-center py-20 animate-in fade-in zoom-in duration-500">
-              <div className="text-8xl mb-6">📦</div>
-              <h2 className="text-4xl font-bold text-white mb-2">Operation Complete</h2>
-              <p className="text-slate-400 mb-8">
-                  {targetDetails.length} records processed.<br/>
-                  Evidence file downloaded.
-              </p>
+              <div className="text-8xl mb-6">🔒</div>
+              <h2 className="text-4xl font-bold text-white mb-2">Salted Hash Applied</h2>
+              <p className="text-slate-400 mb-8">Evidence downloaded successfully.</p>
               <button onClick={() => {setStep(2); setTargetIds([])}} className="bg-purple-600 px-10 py-4 rounded text-white font-bold shadow-lg">
-                Start New Batch
+                Next Batch
               </button>
             </div>
           )}

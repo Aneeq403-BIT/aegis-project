@@ -2,12 +2,10 @@ import { useState } from 'react'
 import logo from './assets/logo.png' 
 
 export default function App() {
-  // --- AUTH STATE ---
   const [token, setToken] = useState(null)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
 
-  // --- APP STATE ---
   const [step, setStep] = useState(1)
   const [dbCreds, setDbCreds] = useState({ db_name: '', user: 'postgres', password: 'root', host: 'localhost', port: '5432' })
   const [schema, setSchema] = useState(null)
@@ -24,7 +22,6 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [log, setLog] = useState([])
 
-  // --- AUTH HANDLER ---
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true)
@@ -45,7 +42,6 @@ export default function App() {
     setLoading(false)
   }
 
-  // Helper for Authenticated Requests
   const authFetch = async (url, options) => {
       const headers = options.headers || {};
       headers['Authorization'] = `Bearer ${token}`;
@@ -127,11 +123,13 @@ export default function App() {
     const pkCol = getPkCol();
     
     const colsToClean = schema[selectedTable].columns
-      .filter(col => col.suggested_strategy === 'HASH')
-      .map(col => ({ col: col.name, strategy: 'HASH' }))
+      .filter(col => col.suggested_strategy !== 'IGNORE' && col.suggested_strategy !== 'PRESERVE')
+      .map(col => ({ 
+          col: col.name, 
+          strategy: col.suggested_strategy
+      }))
 
     try {
-        // NOTE: File download needs special handling with Auth headers
         const res = await fetch('http://127.0.0.1:8000/execute-erasure', {
           method: 'POST', 
           headers: { 
@@ -162,7 +160,6 @@ export default function App() {
     setLoading(false)
   }
 
-  // --- LOGIN VIEW ---
   if (!token) {
       return (
         <div className="min-h-screen bg-slate-900 flex items-center justify-center font-sans">
@@ -184,7 +181,6 @@ export default function App() {
       )
   }
 
-  // --- DASHBOARD VIEW (Existing Code) ---
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 font-sans p-6">
       <div className="max-w-6xl mx-auto grid grid-cols-4 gap-6">
@@ -193,8 +189,8 @@ export default function App() {
         <div className="col-span-1 space-y-6">
             <div className="border-b border-slate-700 pb-6 flex flex-col items-center text-center">
             <img src={logo} alt="Aegis Logo" className="w-24 h-24 mb-4 object-contain" />
-            <h1 className="text-3xl font-black tracking-tight text-white">AEGIS <span className="text-cyan-500">v2.8</span></h1>
-            <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Identity Access Management</p>
+            <h1 className="text-3xl font-black tracking-tight text-white">AEGIS <span className="text-cyan-500">v2.9</span></h1>
+            <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Polymorphic Engine</p>
             <div className="mt-4 text-xs text-green-400 border border-green-600 px-2 py-1 rounded bg-green-900/20">
                 Logged in as: {username}
             </div>
@@ -227,8 +223,8 @@ export default function App() {
           
           {step < 2 && (
             <div className="flex flex-col items-center justify-center flex-grow text-slate-600 opacity-50">
-                <div className="text-8xl mb-6 grayscale opacity-20">🔐</div>
-                <div className="text-2xl font-bold uppercase">Secure Session Active</div>
+                <div className="text-8xl mb-6 grayscale opacity-20">🛡️</div>
+                <div className="text-2xl font-bold uppercase">Polymorphic Engine Ready</div>
             </div>
           )}
 
@@ -284,7 +280,7 @@ export default function App() {
           {step === 3 && (
             <div className="animate-in fade-in zoom-in duration-300 flex flex-col h-full">
                 <div className="flex justify-between items-end mb-6">
-                    <h2 className="text-3xl font-bold text-white">Analysis & Preview</h2>
+                    <h2 className="text-3xl font-bold text-white">Strategy Preview</h2>
                     <div className="text-xs text-purple-400 border border-purple-500 px-3 py-1 rounded bg-purple-900/20">
                         {targetDetails.length} RECORDS
                     </div>
@@ -292,14 +288,14 @@ export default function App() {
 
                 <div className="bg-slate-900 rounded border border-slate-600 mb-6 overflow-hidden">
                     <div className="bg-black/50 p-2 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-700 text-center">
-                        Simulating Protocol on First Record (ID: {targetDetails[0][getPkCol()]})
+                        Simulating Protocol on Sample Record (ID: {targetDetails[0][getPkCol()]})
                     </div>
                     <table className="w-full text-left text-sm">
                         <thead className="bg-slate-950 text-slate-400 text-[10px] uppercase">
                             <tr>
                                 <th className="p-3">Column</th>
                                 <th className="p-3">Sample Data</th>
-                                <th className="p-3">AI Strategy & Reason</th>
+                                <th className="p-3">Applied Strategy</th>
                                 <th className="p-3">Result</th>
                             </tr>
                         </thead>
@@ -308,14 +304,26 @@ export default function App() {
                                 const val = targetDetails[0][col.name];
                                 const action = col.suggested_strategy;
                                 return (
-                                    <tr key={col.name} className={action === 'HASH' ? 'bg-red-900/10' : ''}>
+                                    <tr key={col.name} className={action !== 'IGNORE' && action !== 'PRESERVE' ? 'bg-red-900/10' : ''}>
                                         <td className="p-3 text-slate-400">{col.name}</td>
                                         <td className="p-3 text-white max-w-xs truncate">{val}</td>
                                         <td className="p-3">
                                             {action === 'HASH' && (
                                                 <div className="flex flex-col">
-                                                    <span className="text-[10px] font-bold bg-red-600 text-white px-2 py-1 rounded w-fit">ERASE (PII)</span>
+                                                    <span className="text-[10px] font-bold bg-red-600 text-white px-2 py-1 rounded w-fit">SALTED HASH</span>
                                                     <span className="text-[9px] text-red-300 mt-1 italic">{col.reason}</span>
+                                                </div>
+                                            )}
+                                            {action === 'EMAIL_MASK' && (
+                                                <div className="flex flex-col">
+                                                    <span className="text-[10px] font-bold bg-blue-600 text-white px-2 py-1 rounded w-fit">EMAIL MASK</span>
+                                                    <span className="text-[9px] text-blue-300 mt-1 italic">{col.reason}</span>
+                                                </div>
+                                            )}
+                                            {action === 'MASK' && (
+                                                <div className="flex flex-col">
+                                                    <span className="text-[10px] font-bold bg-yellow-600 text-white px-2 py-1 rounded w-fit">PARTIAL MASK</span>
+                                                    <span className="text-[9px] text-yellow-300 mt-1 italic">{col.reason}</span>
                                                 </div>
                                             )}
                                             {action === 'PRESERVE' && (
@@ -327,7 +335,10 @@ export default function App() {
                                             {action === 'IGNORE' && <span className="text-[10px] text-slate-600 border border-slate-700 px-2 py-1 rounded">IGNORE</span>}
                                         </td>
                                         <td className="p-3">
-                                            {action === 'HASH' ? <span className="text-red-400 blur-[2px]">HASHED_VALUE</span> : <span className="text-slate-600">NO CHANGE</span>}
+                                            {action === 'HASH' && <span className="text-red-400 blur-[2px]">HASH_VAL</span>}
+                                            {action === 'EMAIL_MASK' && <span className="text-blue-400">redacted@gmail.com</span>}
+                                            {action === 'MASK' && <span className="text-yellow-400">***-***-1234</span>}
+                                            {(action === 'PRESERVE' || action === 'IGNORE') && <span className="text-slate-600">NO CHANGE</span>}
                                         </td>
                                     </tr>
                                 )
@@ -349,8 +360,8 @@ export default function App() {
           {step === 4 && (
             <div className="text-center py-20 animate-in fade-in zoom-in duration-500">
               <div className="text-8xl mb-6">🔒</div>
-              <h2 className="text-4xl font-bold text-white mb-2">Salted Hash Applied</h2>
-              <button onClick={() => {setStep(2); setTargetIds([])}} className="bg-purple-600 px-10 py-4 rounded text-white font-bold shadow-lg">
+              <h2 className="text-4xl font-bold text-white mb-2">Protocol Complete</h2>
+              <button onClick={() => {setStep(2); setTargetIds([])}} className="bg-purple-600 px-10 py-4 rounded text-white font-bold shadow-lg mt-8">
                 Next Batch
               </button>
             </div>

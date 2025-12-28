@@ -50,4 +50,18 @@ CREATE TABLE audit_logs (
     status TEXT
 );
 
+-- 1. Create Admins Table
+CREATE TABLE administrators (
+    admin_id SERIAL PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT DEFAULT 'SUPER_ADMIN',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 2. Insert Default Admin (User: admin, Pass: admin123)
+-- Note: This is a BCRYPT hash for 'admin123'
+INSERT INTO administrators (username, password_hash) 
+VALUES ('admin', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxwKc.6IymVFt7H.8/r.m/g.j/O52');
+
 select * from audit_logs;

@@ -7,7 +7,15 @@ export default function App() {
   const [password, setPassword] = useState('')
 
   const [step, setStep] = useState(1)
-  const [dbCreds, setDbCreds] = useState({ db_name: '', user: 'postgres', password: 'root', host: 'localhost', port: '5432' })
+  // NEW: SSL Flag in state
+  const [dbCreds, setDbCreds] = useState({ 
+      db_name: '', 
+      user: 'postgres', 
+      password: 'root', 
+      host: 'localhost', 
+      port: '5432',
+      ssl_enabled: false 
+  })
   const [schema, setSchema] = useState(null)
   const [selectedTable, setSelectedTable] = useState('')
   
@@ -189,8 +197,8 @@ export default function App() {
         <div className="col-span-1 space-y-6">
             <div className="border-b border-slate-700 pb-6 flex flex-col items-center text-center">
             <img src={logo} alt="Aegis Logo" className="w-24 h-24 mb-4 object-contain" />
-            <h1 className="text-3xl font-black tracking-tight text-white">AEGIS <span className="text-cyan-500">v2.9</span></h1>
-            <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Polymorphic Engine</p>
+            <h1 className="text-3xl font-black tracking-tight text-white">AEGIS <span className="text-cyan-500">v3.0</span></h1>
+            <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Cloud Connectivity</p>
             <div className="mt-4 text-xs text-green-400 border border-green-600 px-2 py-1 rounded bg-green-900/20">
                 Logged in as: {username}
             </div>
@@ -205,11 +213,29 @@ export default function App() {
             <h3 className="font-bold mb-2">1. System Link</h3>
             {step === 1 ? (
                 <>
+                    {/* SSL CHECKBOX */}
+                    <div className="flex items-center gap-2 mb-3 bg-slate-900 p-2 rounded border border-slate-700">
+                        <input type="checkbox" checked={dbCreds.ssl_enabled} 
+                            onChange={e => setDbCreds({...dbCreds, ssl_enabled: e.target.checked})} 
+                            className="cursor-pointer" />
+                        <label className="text-[10px] text-slate-300 font-bold">ENABLE CLOUD SSL</label>
+                    </div>
+
                     <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm mb-3 text-white" 
                         placeholder="Database Name..." value={dbCreds.db_name} onChange={e => setDbCreds({...dbCreds, db_name: e.target.value})} 
                     />
+                    <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm mb-3 text-white" 
+                        placeholder="Host (e.g. aws.amazon.com)" value={dbCreds.host} onChange={e => setDbCreds({...dbCreds, host: e.target.value})} 
+                    />
+                    <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm mb-3 text-white" 
+                        placeholder="User" value={dbCreds.user} onChange={e => setDbCreds({...dbCreds, user: e.target.value})} 
+                    />
+                    <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm mb-3 text-white" type="password"
+                        placeholder="Password" value={dbCreds.password} onChange={e => setDbCreds({...dbCreds, password: e.target.value})} 
+                    />
+
                     <button onClick={handleConnect} disabled={loading} className="w-full bg-purple-600 hover:bg-purple-500 text-xs py-3 rounded font-bold">
-                        {loading ? "Linking..." : "Connect"}
+                        {loading ? "Establishing Uplink..." : "Connect"}
                     </button>
                 </>
             ) : (
@@ -223,8 +249,8 @@ export default function App() {
           
           {step < 2 && (
             <div className="flex flex-col items-center justify-center flex-grow text-slate-600 opacity-50">
-                <div className="text-8xl mb-6 grayscale opacity-20">🛡️</div>
-                <div className="text-2xl font-bold uppercase">Polymorphic Engine Ready</div>
+                <div className="text-8xl mb-6 grayscale opacity-20">☁️</div>
+                <div className="text-2xl font-bold uppercase">Cloud Link Active</div>
             </div>
           )}
 

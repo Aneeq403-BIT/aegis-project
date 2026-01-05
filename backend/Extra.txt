@@ -1,0 +1,42 @@
+This is a crucial question. Understanding your project's limitations is actually more impressive to professors/interviewers than just showing off features, because it proves you understand System Design and Enterprise Realities.
+Here is a brutal, honest technical analysis of the limitations of AEGIS v2.5.
+1. Security & Architecture Limitations
+A. The "God Mode" Problem (No RBAC)
+Limitation: Right now, anyone who opens http://localhost:5173 has full administrative power. There is no Login screen. A junior intern could accidentally wipe the CEO's data.
+Enterprise Reality: Real tools need Role-Based Access Control (RBAC). (e.g., "Viewer" can scan, "Admin" can erase).
+B. Weak Cryptography (MD5)
+Limitation: We are using MD5 for hashing ('HASH_' || md5(col)).
+Why it’s bad: MD5 is considered cryptographically broken. It is vulnerable to "Rainbow Table" attacks. If a hacker steals the database, they can reverse-engineer the original emails.
+Fix needed: Switch to SHA-256 with a Salt.
+C. Credential Exposure
+Limitation: The database password is sent from the Frontend to the Backend in a JSON body over HTTP.
+Why it’s bad: If this were deployed on a public Wi-Fi without SSL (HTTPS), a hacker could sniff the traffic and steal the database credentials.
+2. Performance & Scalability Limitations
+A. The "Memory Bomb" (RAM Usage)
+Limitation: When generating the ZIP file for Bulk Operations, we store the entire ZIP in Python's RAM (io.BytesIO) before sending it.
+The Crash Scenario: If you try to erase 50,000 records at once, the ZIP file might become 5GB. Python will run out of RAM and the server will crash (MemoryError).
+Fix needed: Stream the ZIP file directly to the client as it is being created, or save it to disk first.
+B. Synchronous Blocking
+Limitation: While the loop is processing 1,000 records, the API "hangs" until it is finished. The UI freezes or shows a spinning wheel.
+The Crash Scenario: Browsers often timeout requests that take longer than 60 seconds. A massive batch job would timeout and fail halfway through.
+Fix needed: Implement Background Tasks (using Celery or Redis Queues) where the user gets a "Job ID" and checks progress later.
+3. "Smart Brain" Intelligence Limitations
+A. Metadata-Only Detection (Shallow Scan)
+Limitation: Aegis v2.5 only looks at Column Names (email, ssn).
+The Blind Spot: If a developer named a column user_data_field_1 but filled it with Credit Card numbers, Aegis will ignore it (Strategy: IGNORE).
+Fix needed: Content Inspection. The engine needs to peek at the first 10 rows of data and use Regex to guess the data type (e.g., "This looks like a VISA card format").
+B. Boolean Logic Only
+Limitation: The strategy is binary: either HASH or IGNORE.
+The nuance: In real GDPR, sometimes you need to Generalized data (e.g., change DOB 1990-05-20 to just 1990) rather than destroying it. Aegis v2.5 lacks this nuance.
+4. Database Support
+A. PostgreSQL Exclusive
+Limitation: The code heavily relies on asyncpg and specific Postgres SQL syntax (::text, information_schema quirks).
+The Issue: It will not work on MySQL, Oracle, or MongoDB.
+Fix needed: An abstraction layer (like SQLAlchemy or a custom Interface pattern) to support multiple SQL dialects.
+
+
+User: neondb_owner
+Password: npg_g4cLNOHZev9Y
+Host: ep-plain-fire-adlxntu5-pooler.c-2.us-east-1.aws.neon.tech
+Database: neondb
+Requirements: sslmode=require (This confirms we must update the Python code to support SSL).

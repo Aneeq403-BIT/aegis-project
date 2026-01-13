@@ -43,7 +43,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", # For local testing
-        "https://aegis-sovereignty.vercel.app" # REPLACE with your actual Vercel URL later
+        "https://aegis-project-eta.vercel.app" # REPLACE with your actual Vercel URL later
         ], 
     allow_methods=["*"],
     allow_headers=["*"],

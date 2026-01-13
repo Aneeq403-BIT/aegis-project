@@ -5,8 +5,6 @@ pydantic
 python-dotenv
 fpdf
 email-validator
-tasks
-smtplib
 bycrypt
 python-multipart
 python-jose[cryptography]

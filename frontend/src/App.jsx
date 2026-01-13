@@ -1,24 +1,27 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import logo from './assets/logo.png' 
 
 export default function App() {
-  const [token, setToken] = useState(null)
-  const [username, setUsername] = useState('')
+  // --- AUTHENTICATION STATE ---
+  const [token, setToken] = useState(localStorage.getItem('aegis_token') || null)
+  const [user, setUser] = useState(JSON.parse(localStorage.getItem('aegis_user')) || null)
+  const [isSignup, setIsSignup] = useState(false)
+  
+  // Login/Signup Inputs
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [org, setOrg] = useState('')
 
+  const [acceptedPolicy, setAcceptedPolicy] = useState(false); // Tracks the checkbox
+
+  // --- ENGINE STATE ---
   const [step, setStep] = useState(1)
-  // NEW: SSL Flag in state
   const [dbCreds, setDbCreds] = useState({ 
-      db_name: '', 
-      user: 'postgres', 
-      password: 'root', 
-      host: 'localhost', 
-      port: '5432',
-      ssl_enabled: false 
+      db_name: '', user: 'postgres', password: 'root', 
+      host: 'localhost', port: '5432', ssl_enabled: true 
   })
   const [schema, setSchema] = useState(null)
   const [selectedTable, setSelectedTable] = useState('')
-  
   const [mode, setMode] = useState('SINGLE') 
   const [singleId, setSingleId] = useState('')
   const [rangeStart, setRangeStart] = useState('')
@@ -27,369 +30,527 @@ export default function App() {
   
   const [targetIds, setTargetIds] = useState([]) 
   const [targetDetails, setTargetDetails] = useState([])
+  
+  // --- JOB TRACKING STATE (10/10 Architecture) ---
+  const [activeJobId, setActiveJobId] = useState(null)
+  const [jobStatus, setJobStatus] = useState(null)
   const [loading, setLoading] = useState(false)
   const [log, setLog] = useState([])
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoading(true)
-    const formData = new FormData();
-    formData.append('username', username);
-    formData.append('password', password);
-
-    try {
-        const res = await fetch('http://127.0.0.1:8000/token', {
-            method: 'POST', body: formData
-        })
-        if (!res.ok) throw new Error("Invalid Credentials");
-        const data = await res.json();
-        setToken(data.access_token);
-    } catch(err) {
-        alert("Login Failed: " + err.message);
+  // Persistence Hook
+  useEffect(() => {
+    if (token) {
+        localStorage.setItem('aegis_token', token);
+        localStorage.setItem('aegis_user', JSON.stringify(user));
+    } else {
+        localStorage.removeItem('aegis_token');
+        localStorage.removeItem('aegis_user');
     }
-    setLoading(false)
-  }
+  }, [token, user]);
 
-  const authFetch = async (url, options) => {
+  // Polling Hook for Background Jobs
+  useEffect(() => {
+    let interval;
+    if (activeJobId && jobStatus?.status !== 'completed' && jobStatus?.status !== 'failed') {
+        interval = setInterval(async () => {
+            try {
+                const res = await authFetch(`http://127.0.0.1:8000/job-status/${activeJobId}`);
+                const data = await res.json();
+                setJobStatus(data);
+                if (data.status === 'completed') {
+                    setLog(p => [...p, `✅ Job ${activeJobId.slice(0,8)} finished.`]);
+                    setStep(4);
+                }
+            } catch (e) { 
+                console.error("Polling Error", e);
+                setLog(p => [...p, `⚠️ Connection lost to Background Job process.`]);
+            }
+        }, 2000);
+    }
+    return () => clearInterval(interval);
+  }, [activeJobId, jobStatus]);
+
+  // --- API WRAPPERS ---
+
+  const authFetch = async (url, options = {}) => {
       const headers = options.headers || {};
       headers['Authorization'] = `Bearer ${token}`;
-      headers['Content-Type'] = 'application/json';
+      if (!(options.body instanceof FormData)) {
+          headers['Content-Type'] = 'application/json';
+      }
       return fetch(url, { ...options, headers });
   }
 
-  const getPkCol = () => {
-      if (!schema || !selectedTable) return '';
-      const pk = schema[selectedTable].primary_key;
-      return pk !== "UNKNOWN" ? pk : schema[selectedTable].columns[0].name;
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    const formData = new FormData();
+    formData.append('username', email); 
+    formData.append('password', password);
+
+    try {
+        const res = await fetch('http://127.0.0.1:8000/token', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error("Invalid Authorization Handshake");
+        const data = await res.json();
+        setToken(data.access_token);
+        setUser({ email, role: email.includes('admin') ? 'SUPER_ADMIN' : 'CLIENT' });
+        setLog(p => [...p, `🔑 Secure session initialized for ${email}`]);
+    } catch(err) { 
+        alert(err.message);
+        setLog(p => [...p, `❌ Failed login attempt: ${err.message}`]);
+    }
+    setLoading(false);
   }
 
+  const handleSignup = async (e) => {
+   e.preventDefault();
+   if (!acceptedPolicy) {
+       alert("You must accept the Privacy Policy to proceed.");
+       return;
+   }
+   setLoading(true);
+   try {
+       const res = await fetch('http://127.0.0.1:8000/auth/signup', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({ 
+               email, 
+               password, 
+               organization_name: org, 
+               full_name: org,
+               accept_privacy_policy: acceptedPolicy 
+           })
+       });
+       if (!res.ok) {
+           const errorData = await res.json();
+           throw new Error(errorData.detail || "Signup Protocol Rejected");
+       }
+       alert("Account Authorized. Proceed to Login.");
+       setIsSignup(false); 
+    } catch(err) { alert(err.message); }
+   setLoading(false);
+  }
+
+  // --- ENGINE LOGIC ---
+
   const handleConnect = async () => {
-    if(!dbCreds.db_name) { alert("Enter DB Name"); return; }
-    setLoading(true)
+    setLoading(true);
     try {
       const res = await authFetch('http://127.0.0.1:8000/scan-target', {
         method: 'POST', body: JSON.stringify(dbCreds)
-      })
-      if (!res.ok) throw new Error("Connection Failed / Unauthorized")
-      const data = await res.json()
-      setSchema(data.schema)
-      setStep(2)
-      setLog(p => [...p, `✅ Connected to [${dbCreds.db_name}]`])
-    } catch (e) { alert(e.message) }
-    setLoading(false)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Target Connection Refused");
+      setSchema(data.schema);
+      setStep(2);
+      setLog(p => [...p, `📡 Introspection Uplink established with ${dbCreds.db_name}`]);
+    } catch (e) { 
+        alert("Link Error: " + e.message);
+        setLog(p => [...p, `❌ Uplink Failed: ${e.message}`]);
+    }
+    setLoading(false);
   }
 
   const handlePrepare = async () => {
-    if (!selectedTable) { alert("Select Table"); return; }
-    let ids = [];
-
-    if (mode === 'SINGLE') {
-        if (!singleId) { alert("Enter ID"); return; }
-        ids.push(singleId.trim());
-    } 
-    else if (mode === 'RANGE') {
-        const start = parseInt(rangeStart);
-        const end = parseInt(rangeEnd);
-        if (isNaN(start) || isNaN(end)) { alert("Range mode requires Integer IDs"); return; }
-        if ((end - start) > 1000) { alert("Max 1000 records"); return; }
-        for (let i = start; i <= end; i++) ids.push(String(i));
-    } 
-    else if (mode === 'LIST') {
-        ids = listIds.split(',').map(x => x.trim()).filter(x => x !== '');
-    }
-
-    if (ids.length === 0) { alert("No valid IDs"); return; }
+    if (!selectedTable) { alert("Select a target table first."); return; }
     
-    setLoading(true)
+    let ids = [];
     try {
+        if (mode === 'SINGLE') {
+            if (!singleId.trim()) throw new Error("ID cannot be empty.");
+            ids.push(singleId.trim());
+        } 
+        else if (mode === 'RANGE') {
+            const start = parseInt(rangeStart);
+            const end = parseInt(rangeEnd);
+            if (isNaN(start) || isNaN(end)) throw new Error("Range requires valid integers.");
+            if (start > end) throw new Error("Range start cannot exceed end.");
+            if ((end - start) > 1000) throw new Error("Max range limited to 1000 records per batch.");
+            for (let i = start; i <= end; i++) ids.push(String(i));
+        } else {
+            if (!listIds.trim()) throw new Error("List cannot be empty.");
+            ids = listIds.split(',').map(x => x.trim()).filter(x => x !== '');
+        }
+
+        setLoading(true);
+        const pkCol = schema[selectedTable]?.primary_key || "UNKNOWN";
+        
         const res = await authFetch('http://127.0.0.1:8000/fetch-batch-details', {
             method: 'POST', body: JSON.stringify({
                 connection: dbCreds,
                 table_name: selectedTable,
-                primary_key_col: getPkCol(),
+                primary_key_col: pkCol,
                 target_ids: ids
             })
-        })
-        const data = await res.json()
+        });
         
-        if (data && data.length > 0) {
-            setTargetIds(ids)
-            setTargetDetails(data)
-            setStep(3)
-            setLog(p => [...p, `🔍 Retrieved ${data.length} records`])
-        } else {
-            alert(`No records found using PK '${getPkCol()}'`)
+        const data = await res.json();
+        if (!res.ok || !data || data.length === 0) {
+            throw new Error("No records found. Please verify the IDs and Primary Key.");
         }
-    } catch (e) { alert(e.message) }
-    setLoading(false)
+
+        setTargetIds(ids);
+        setTargetDetails(data);
+        setStep(3);
+        setLog(p => [...p, `🔍 Isolated ${data.length} records in ${selectedTable}`]);
+    } catch (e) { 
+        alert(e.message);
+        setLog(p => [...p, `⚠️ Isolate Error: ${e.message}`]);
+    }
+    setLoading(false);
   }
 
-  const handleExecute = async () => {
-    if(!confirm(`Proceed with erasure of ${targetIds.length} records?`)) return;
-
-    setLoading(true)
-    const pkCol = getPkCol();
+  const handleExecuteProtocol = async () => {
+    if (!confirm(`Commit irreversible erasure protocol for ${targetIds.length} records?`)) return;
     
-    const colsToClean = schema[selectedTable].columns
+    setLoading(true);
+    // Safety check for schema presence
+    const currentTableSchema = schema?.[selectedTable];
+    if (!currentTableSchema) {
+        alert("Schema context lost. Please reconnect.");
+        return;
+    }
+
+    const colsToClean = currentTableSchema.columns
       .filter(col => col.suggested_strategy !== 'IGNORE' && col.suggested_strategy !== 'PRESERVE')
-      .map(col => ({ 
-          col: col.name, 
-          strategy: col.suggested_strategy
-      }))
+      .map(col => ({ col: col.name, strategy: col.suggested_strategy }));
 
     try {
-        const res = await fetch('http://127.0.0.1:8000/execute-erasure', {
+        const res = await authFetch('http://127.0.0.1:8000/execute-erasure', {
           method: 'POST', 
-          headers: { 
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json' 
-          },
           body: JSON.stringify({
             connection: dbCreds,
             target_table: selectedTable,
-            target_id_col: pkCol,
+            target_id_col: currentTableSchema.primary_key,
             target_ids: targetIds,
             columns_to_clean: colsToClean
           })
-        })
-
-        if (res.ok) {
-          const blob = await res.blob();
-          const url = window.URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `AEGIS_Batch.zip`;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          setStep(4)
-        } else { alert("Server Error or Unauthorized") }
-    } catch (e) { alert(e.message) }
-    setLoading(false)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Protocol Dispatch Failed");
+        
+        setActiveJobId(data.job_id);
+        setJobStatus({ status: 'queued', progress: 0 });
+        setLog(p => [...p, `🚀 Protocol Job ${data.job_id.slice(0,8)} dispatched.`]);
+    } catch (e) { 
+        alert(e.message);
+        setLog(p => [...p, `❌ Execution Error: ${e.message}`]);
+    }
+    setLoading(false);
   }
 
-  if (!token) {
-      return (
-        <div className="min-h-screen bg-slate-900 flex items-center justify-center font-sans">
-            <div className="bg-slate-800 p-8 rounded-xl shadow-2xl border border-slate-700 w-96 text-center">
-                <img src={logo} alt="Logo" className="w-20 h-20 mx-auto mb-4 object-contain" />
-                <h1 className="text-2xl font-bold text-white mb-6">AEGIS <span className="text-cyan-500">IAM</span></h1>
-                <form onSubmit={handleLogin} className="space-y-4">
-                    <input className="w-full bg-slate-900 border border-slate-600 rounded p-3 text-white" 
-                        placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
-                    <input className="w-full bg-slate-900 border border-slate-600 rounded p-3 text-white" type="password"
-                        placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
-                    <button type="submit" disabled={loading} className="w-full bg-cyan-600 hover:bg-cyan-500 py-3 rounded text-white font-bold">
-                        {loading ? "Authenticating..." : "Secure Login"}
-                    </button>
-                </form>
-                <p className="text-xs text-slate-500 mt-4">Restricted Access. Authorized Personnel Only.</p>
-            </div>
+  const downloadResults = async () => {
+    try {
+        const res = await authFetch(`http://127.0.0.1:8000/download-results/${activeJobId}`);
+        if (!res.ok) throw new Error("File not available.");
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `AEGIS_CLEAN_REPORT_${activeJobId.slice(0,8)}.zip`;
+        a.click();
+    } catch (e) { alert("Download failed: " + e.message); }
+  }
+
+  // --- UI COMPONENTS ---
+
+if (!token) {
+  return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center font-sans p-4">
+        <div className="bg-slate-800 p-10 rounded-3xl shadow-2xl border border-slate-700 w-full max-w-md">
+            <img src={logo} className="w-24 mx-auto mb-6 drop-shadow-[0_0_15px_rgba(6,182,212,0.5)]" />
+            <h1 className="text-3xl font-black text-white text-center mb-2">AEGIS <span className="text-cyan-500">ENGINE</span></h1>
+            <p className="text-slate-400 text-center text-sm mb-8">{isSignup ? 'Initialize your Client Node' : 'Authorized Personnel Access Only'}</p>
+            
+            <form onSubmit={isSignup ? handleSignup : handleLogin} className="space-y-4">
+                {isSignup && (
+                  <div className="space-y-4 animate-in fade-in duration-500">
+                    <input className="w-full bg-slate-950 border border-slate-700 rounded-xl p-4 text-white focus:border-cyan-500 outline-none transition-all" 
+                    placeholder="Organization Name" required value={org} onChange={e => setOrg(e.target.value)} />
+                    
+                    <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 text-[10px] text-slate-400 h-32 overflow-y-auto font-mono leading-relaxed shadow-inner custom-scrollbar">
+                        <p className="font-bold text-cyan-500 mb-2 uppercase tracking-widest border-b border-slate-700 pb-1">AEGIS PRIVACY & ACCESS POLICY v4.6</p>
+                        <p className="mb-2">1. DATA ACCESS: You grant AEGIS surgical access to scan all database contents, including sensitive PII for introspection purposes.</p>
+                        <p className="mb-2">2. AUDIT LOGS: We maintain immutable logs of all erasures for legal proof of compliance and system safekeeping.</p>
+                        <p className="mb-2">3. USER CONTENTS: You permit the temporary sampling of row-level data to enable Deep Scan heuristics.</p>
+                        <p className="mb-2">4. LIABILITY: The client is responsible for database integrity and ensuring AEGIS has the correct user permissions.</p>
+                        <p>5. PSEUDONYMIZATION: You acknowledge that erasure is irreversible once the AGS-v3 Protocol is committed.</p>
+                    </div>
+
+                    <div className="flex items-start gap-3 p-2 bg-slate-900/50 rounded-lg border border-slate-700">
+                        <input 
+                            type="checkbox" 
+                            id="policy" 
+                            checked={acceptedPolicy} 
+                            onChange={(e) => setAcceptedPolicy(e.target.checked)}
+                            className="mt-1 w-4 h-4 accent-cyan-500 cursor-pointer" 
+                        />
+                        <label htmlFor="policy" className="text-[10px] text-slate-300 leading-tight cursor-pointer">
+                            I acknowledge the AEGIS Policy and grant explicit permission to access my remote database contents for introspection and erasure.
+                        </label>
+                    </div>
+                  </div>
+                )}
+
+                <input className="w-full bg-slate-950 border border-slate-700 rounded-xl p-4 text-white focus:border-cyan-500 outline-none transition-all" 
+                    placeholder="Corporate Email" type="email" required value={email} onChange={e => setEmail(e.target.value)} />
+                <input className="w-full bg-slate-950 border border-slate-700 rounded-xl p-4 text-white focus:border-cyan-500 outline-none transition-all" 
+                    type="password" placeholder="Key Phrase" required value={password} onChange={e => setPassword(e.target.value)} />
+                
+                <button 
+                  type="submit" 
+                  disabled={loading || (isSignup && !acceptedPolicy)} 
+                  className={`w-full py-4 rounded-xl text-white font-black tracking-widest shadow-lg transition-all ${
+                      (isSignup && !acceptedPolicy) ? 'bg-slate-700 cursor-not-allowed grayscale' : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500'
+                  }`}
+                >
+                    {loading ? "PROCESSING..." : isSignup ? "AUTHORIZE & REGISTER" : "SECURE LOGIN"}
+                </button>
+            </form>
+            
+            <button onClick={() => { setIsSignup(!isSignup); setAcceptedPolicy(false); }} className="w-full text-slate-500 text-xs mt-6 hover:text-cyan-400 transition-colors">
+                {isSignup ? "Already have an uplink? Login" : "Need an AEGIS account? Register Organization"}
+            </button>
         </div>
-      )
-  }
+    </div>
+  )
+}
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans p-6">
-      <div className="max-w-6xl mx-auto grid grid-cols-4 gap-6">
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans p-6 selection:bg-cyan-500/30">
+      <div className="max-w-7xl mx-auto grid grid-cols-12 gap-8">
         
-        {/* SIDEBAR */}
-        <div className="col-span-1 space-y-6">
-            <div className="border-b border-slate-700 pb-6 flex flex-col items-center text-center">
-            <img src={logo} alt="Aegis Logo" className="w-24 h-24 mb-4 object-contain" />
-            <h1 className="text-3xl font-black tracking-tight text-white">AEGIS <span className="text-cyan-500">v3.0</span></h1>
-            <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Cloud Connectivity</p>
-            <div className="mt-4 text-xs text-green-400 border border-green-600 px-2 py-1 rounded bg-green-900/20">
-                Logged in as: {username}
+        {/* SIDEBAR: SYSTEM MONITOR */}
+        <div className="col-span-12 lg:col-span-3 space-y-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 flex flex-col items-center text-center shadow-xl">
+            <img src={logo} className="w-20 h-20 mb-4" />
+            <h1 className="text-2xl font-black text-white">AEGIS <span className="text-cyan-500">v4.5</span></h1>
+            <p className="text-[10px] text-slate-500 uppercase tracking-[0.3em] mt-1">Sovereignty Engine</p>
+            
+            <div className="w-full mt-6 p-4 bg-slate-950 rounded-2xl border border-slate-800 text-left">
+                <p className="text-[10px] text-slate-500 uppercase font-bold">Node Identity</p>
+                <p className="text-sm font-mono text-cyan-400 truncate">{user?.email}</p>
+                <p className="text-[10px] text-green-500 mt-2 font-bold uppercase tracking-tighter">● System Online</p>
             </div>
-            <button onClick={() => setToken(null)} className="text-xs text-red-400 mt-2 underline">Logout</button>
-          </div>
-          
-          <div className="bg-black/50 rounded border border-slate-800 p-2 font-mono text-[10px] h-48 overflow-y-auto">
-            {log.map((l, i) => <div key={i} className="mb-1 text-purple-400">{l}</div>)}
+            
+            <button onClick={() => setToken(null)} className="mt-4 text-xs text-red-500 hover:text-red-400 font-bold uppercase tracking-widest">Terminate Session</button>
           </div>
 
-          <div className={`p-4 rounded border transition-all ${step === 1 ? 'border-purple-500 bg-slate-800' : 'border-green-500 bg-slate-900'}`}>
-            <h3 className="font-bold mb-2">1. System Link</h3>
-            {step === 1 ? (
-                <>
-                    {/* SSL CHECKBOX */}
-                    <div className="flex items-center gap-2 mb-3 bg-slate-900 p-2 rounded border border-slate-700">
-                        <input type="checkbox" checked={dbCreds.ssl_enabled} 
-                            onChange={e => setDbCreds({...dbCreds, ssl_enabled: e.target.checked})} 
-                            className="cursor-pointer" />
-                        <label className="text-[10px] text-slate-300 font-bold">ENABLE CLOUD SSL</label>
-                    </div>
-
-                    <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm mb-3 text-white" 
-                        placeholder="Database Name..." value={dbCreds.db_name} onChange={e => setDbCreds({...dbCreds, db_name: e.target.value})} 
-                    />
-                    <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm mb-3 text-white" 
-                        placeholder="Host (e.g. aws.amazon.com)" value={dbCreds.host} onChange={e => setDbCreds({...dbCreds, host: e.target.value})} 
-                    />
-                    <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm mb-3 text-white" 
-                        placeholder="User" value={dbCreds.user} onChange={e => setDbCreds({...dbCreds, user: e.target.value})} 
-                    />
-                    <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-sm mb-3 text-white" type="password"
-                        placeholder="Password" value={dbCreds.password} onChange={e => setDbCreds({...dbCreds, password: e.target.value})} 
-                    />
-
-                    <button onClick={handleConnect} disabled={loading} className="w-full bg-purple-600 hover:bg-purple-500 text-xs py-3 rounded font-bold">
-                        {loading ? "Establishing Uplink..." : "Connect"}
-                    </button>
-                </>
-            ) : (
-                <button onClick={() => setStep(1)} className="w-full border border-slate-600 text-slate-400 text-xs py-2 rounded">Disconnect</button>
-            )}
+          <div className="bg-black/40 rounded-3xl border border-slate-800 p-4 font-mono text-[10px] h-64 overflow-y-auto shadow-inner">
+            <p className="text-slate-600 mb-2 border-b border-slate-800 pb-1 uppercase font-bold tracking-widest text-center">System Log</p>
+            {log.map((l, i) => <div key={i} className="mb-1 text-cyan-500/80 tracking-tighter">{`> ${l}`}</div>)}
           </div>
         </div>
 
-        {/* MAIN PANEL */}
-        <div className="col-span-3 bg-slate-800/30 border border-slate-700 rounded-xl p-8 relative min-h-[500px] flex flex-col">
+        {/* MAIN INTERFACE: THE COMMAND CENTER */}
+        <div className="col-span-12 lg:col-span-9 bg-slate-900/50 border border-slate-800 rounded-[3rem] p-10 relative shadow-2xl backdrop-blur-sm">
           
-          {step < 2 && (
-            <div className="flex flex-col items-center justify-center flex-grow text-slate-600 opacity-50">
-                <div className="text-8xl mb-6 grayscale opacity-20">☁️</div>
-                <div className="text-2xl font-bold uppercase">Cloud Link Active</div>
+          {/* STEP 1: UPLINK */}
+          {step === 1 && (
+            <div className="max-w-2xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700">
+                <h2 className="text-4xl font-black text-white mb-2">Remote Link</h2>
+                <p className="text-slate-400 mb-10 text-lg">Provide the target database DSN for introspection.</p>
+                
+                <div className="grid grid-cols-2 gap-6">
+                    <div className="col-span-2">
+                        <label className="text-xs font-bold text-slate-500 uppercase ml-2">Remote Host (RDS/Neon/Azure)</label>
+                        <input className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 mt-2 focus:ring-2 ring-cyan-500/20 outline-none text-white" 
+                        placeholder="db.example.com" value={dbCreds.host} onChange={e => setDbCreds({...dbCreds, host: e.target.value})} />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase ml-2">Database Name</label>
+                        <input className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 mt-2 text-white" 
+                        value={dbCreds.db_name} onChange={e => setDbCreds({...dbCreds, db_name: e.target.value})} />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase ml-2">Port</label>
+                        <input className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 mt-2 text-white" 
+                        value={dbCreds.port} onChange={e => setDbCreds({...dbCreds, port: e.target.value})} />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase ml-2">Admin User</label>
+                        <input className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 mt-2 text-white" 
+                        value={dbCreds.user} onChange={e => setDbCreds({...dbCreds, user: e.target.value})} />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase ml-2">Access Key</label>
+                        <input className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 mt-2 text-white" type="password" 
+                        value={dbCreds.password} onChange={e => setDbCreds({...dbCreds, password: e.target.value})} />
+                    </div>
+                </div>
+
+                <div className="mt-10 flex items-center justify-between bg-slate-950 p-6 rounded-3xl border border-slate-800">
+                    <div>
+                        <p className="text-white font-bold">Encrypted Handshake</p>
+                        <p className="text-xs text-slate-500">Enable SSL/TLS for remote cloud production.</p>
+                    </div>
+                    <input type="checkbox" checked={dbCreds.ssl_enabled} className="w-6 h-6 rounded accent-cyan-500 cursor-pointer"
+                        onChange={e => setDbCreds({...dbCreds, ssl_enabled: e.target.checked})} />
+                </div>
+
+                <button onClick={handleConnect} disabled={loading} className="w-full mt-10 bg-white text-slate-900 py-5 rounded-3xl font-black text-xl hover:bg-cyan-400 transition-all shadow-[0_10px_30px_rgba(0,0,0,0.5)]">
+                    {loading ? "ESTABLISHING UPLINK..." : "INITIALIZE SCAN"}
+                </button>
             </div>
           )}
 
-          {/* STEP 2: SELECTION */}
+          {/* STEP 2: CONFIGURATION */}
           {step === 2 && (
-             <div className="animate-in slide-in-from-right duration-300">
-                <h2 className="text-3xl font-bold text-white mb-6">Target Configuration</h2>
-                
-                <div className="mb-6">
-                    <label className="text-xs uppercase text-slate-400 font-bold">Target Table</label>
-                    <select className="w-full bg-slate-900 border border-slate-600 rounded p-3 mt-1 text-white"
-                        onChange={e => setSelectedTable(e.target.value)} value={selectedTable}>
-                        <option value="">Select Table...</option>
-                        {schema && Object.keys(schema).map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
+            <div className="animate-in slide-in-from-right duration-500 h-full flex flex-col">
+                <div className="flex justify-between items-start mb-10">
+                    <div>
+                        <h2 className="text-4xl font-black text-white mb-2">Target Isolation</h2>
+                        <p className="text-slate-400">Identify the specific table and records for the erasure protocol.</p>
+                    </div>
+                    <button onClick={() => setStep(1)} className="text-cyan-500 font-bold border-b border-cyan-500">Disconnect Link</button>
                 </div>
 
-                <div className="flex gap-2 mb-6 border-b border-slate-700">
-                    {['SINGLE', 'RANGE', 'LIST'].map(m => (
-                        <button key={m} onClick={() => setMode(m)} 
-                            className={`px-4 py-2 text-sm font-bold ${mode === m ? 'text-purple-400 border-b-2 border-purple-400' : 'text-slate-500'}`}>
-                            {m}
-                        </button>
-                    ))}
-                </div>
+                <div className="grid grid-cols-1 gap-8 flex-grow">
+                    <div className="bg-slate-950 p-8 rounded-[2rem] border border-slate-800">
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-4 block">1. Select Target Table</label>
+                        <select className="w-full bg-slate-900 border border-slate-700 rounded-2xl p-5 text-white outline-none appearance-none cursor-pointer"
+                            onChange={e => setSelectedTable(e.target.value)} value={selectedTable}>
+                            <option value="">Awaiting table selection...</option>
+                            {schema && Object.keys(schema).map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                    </div>
 
-                <div className="bg-slate-900 p-6 rounded border border-slate-700 mb-6">
-                    {mode === 'SINGLE' && (
-                        <input className="w-full bg-slate-800 border border-slate-600 rounded p-3 text-white" 
-                            placeholder="Enter ID..." value={singleId} onChange={e => setSingleId(e.target.value)} />
-                    )}
-                    {mode === 'RANGE' && (
-                        <div className="flex gap-4">
-                            <input className="w-1/2 bg-slate-800 border border-slate-600 rounded p-3 text-white" 
-                                placeholder="Start Int" value={rangeStart} onChange={e => setRangeStart(e.target.value)} />
-                            <input className="w-1/2 bg-slate-800 border border-slate-600 rounded p-3 text-white" 
-                                placeholder="End Int" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} />
+                    <div className="bg-slate-950 p-8 rounded-[2rem] border border-slate-800">
+                        <label className="text-xs font-bold text-slate-500 uppercase mb-4 block">2. Define Record Scope</label>
+                        <div className="flex gap-4 mb-6">
+                            {['SINGLE', 'RANGE', 'LIST'].map(m => (
+                                <button key={m} onClick={() => setMode(m)} 
+                                    className={`flex-1 py-3 rounded-xl font-bold transition-all ${mode === m ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20' : 'bg-slate-900 text-slate-500'}`}>
+                                    {m}
+                                </button>
+                            ))}
                         </div>
-                    )}
-                    {mode === 'LIST' && (
-                        <input className="w-full bg-slate-800 border border-slate-600 rounded p-3 text-white" 
-                            placeholder="e.g. user_01, user_02" value={listIds} onChange={e => setListIds(e.target.value)} />
-                    )}
+                        {mode === 'SINGLE' && <input className="w-full bg-slate-900 border border-slate-700 rounded-2xl p-5 text-white" placeholder="Target Primary Key ID" value={singleId} onChange={e => setSingleId(e.target.value)} />}
+                        {mode === 'RANGE' && (
+                            <div className="flex gap-4">
+                                <input className="w-1/2 bg-slate-900 border border-slate-700 rounded-2xl p-5 text-white" placeholder="Start ID (Integer)" value={rangeStart} onChange={e => setRangeStart(e.target.value)} />
+                                <input className="w-1/2 bg-slate-900 border border-slate-700 rounded-2xl p-5 text-white" placeholder="End ID (Integer)" value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} />
+                            </div>
+                        )}
+                        {mode === 'LIST' && <input className="w-full bg-slate-900 border border-slate-700 rounded-2xl p-5 text-white" placeholder="IDs separated by comma (e.g. 1, 15, 20)" value={listIds} onChange={e => setListIds(e.target.value)} />}
+                    </div>
                 </div>
 
-                <button onClick={handlePrepare} disabled={loading} className="px-8 py-4 rounded bg-purple-600 hover:bg-purple-500 text-white font-bold w-full shadow-lg">
-                    {loading ? "Verifying Targets..." : `Initialize ${mode} Protocol`}
+                <button onClick={handlePrepare} disabled={loading || !selectedTable} className="w-full mt-10 bg-cyan-600 text-white py-6 rounded-3xl font-black text-xl hover:bg-cyan-500 transition-all shadow-xl disabled:opacity-50 disabled:cursor-not-allowed">
+                    {loading ? "PREPARING SCOPE..." : "ISOLATE RECORDS"}
                 </button>
-             </div>
+            </div>
           )}
 
-          {/* STEP 3: PREVIEW */}
-          {step === 3 && (
-            <div className="animate-in fade-in zoom-in duration-300 flex flex-col h-full">
-                <div className="flex justify-between items-end mb-6">
-                    <h2 className="text-3xl font-bold text-white">Strategy Preview</h2>
-                    <div className="text-xs text-purple-400 border border-purple-500 px-3 py-1 rounded bg-purple-900/20">
-                        {targetDetails.length} RECORDS
+          {/* STEP 3: STRATEGY PREVIEW (Hardened logic) */}
+          {step === 3 && targetDetails.length > 0 ? (
+            <div className="flex flex-col h-full animate-in zoom-in-95 duration-500">
+                <div className="flex justify-between items-center mb-8">
+                    <h2 className="text-4xl font-black text-white">Strategy Preview</h2>
+                    <span className="bg-cyan-500/10 text-cyan-500 border border-cyan-500/20 px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest">{targetIds.length} Targeted Records</span>
+                </div>
+
+                <div className="bg-slate-950 rounded-[2rem] border border-slate-800 overflow-hidden flex-grow mb-8 flex flex-col shadow-2xl">
+                    <div className="bg-slate-900/50 p-4 text-[10px] uppercase font-black text-slate-500 border-b border-slate-800 flex justify-between">
+                        <span>Introspection Engine v4.6 Active</span>
+                        {/* Optional chaining protects against schema or targetDetails missing data */}
+                        <span>Sample Record ID: {targetDetails[0]?.[schema?.[selectedTable]?.primary_key] || "N/A"}</span>
+                    </div>
+                    <div className="overflow-y-auto flex-grow custom-scrollbar">
+                        <table className="w-full text-left">
+                            <thead className="sticky top-0 bg-slate-950 text-slate-500 text-[10px] uppercase font-black">
+                                <tr>
+                                    <th className="p-6">Column Name</th>
+                                    <th className="p-6">Detection Reason</th>
+                                    <th className="p-6">Applied Logic</th>
+                                    <th className="p-6">Visual Result</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-900 font-mono text-xs text-white">
+                                {schema?.[selectedTable]?.columns.map((col) => {
+                                    const action = col.suggested_strategy;
+                                    return (
+                                        <tr key={col.name} className={`hover:bg-slate-900/30 transition-colors ${action !== 'IGNORE' && action !== 'PRESERVE' ? 'bg-cyan-500/5' : 'opacity-60'}`}>
+                                            <td className="p-6 font-bold text-slate-300">{col.name}</td>
+                                            <td className="p-6 italic text-slate-500">{col.reason}</td>
+                                            <td className="p-6">
+                                                <span className={`px-3 py-1 rounded-md text-[10px] font-black uppercase ${
+                                                    action === 'HASH' ? 'bg-red-500/10 text-red-500' :
+                                                    action === 'EMAIL_MASK' ? 'bg-blue-500/10 text-blue-500' :
+                                                    action === 'MASK' ? 'bg-yellow-500/10 text-yellow-500' :
+                                                    'bg-slate-800 text-slate-500'
+                                                }`}>
+                                                    {action}
+                                                </span>
+                                            </td>
+                                            <td className="p-6">
+                                                {action === 'HASH' && <span className="text-red-500 blur-sm">POLYMORPHIC_HASH</span>}
+                                                {action === 'EMAIL_MASK' && <span className="text-blue-400">redacted@***.com</span>}
+                                                {action === 'MASK' && <span className="text-yellow-400">***-***-1234</span>}
+                                                {(action === 'PRESERVE' || action === 'IGNORE') && <span className="text-slate-600 uppercase tracking-tighter">Untouched</span>}
+                                            </td>
+                                        </tr>
+                                    )
+                                })}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
 
-                <div className="bg-slate-900 rounded border border-slate-600 mb-6 overflow-hidden">
-                    <div className="bg-black/50 p-2 text-[10px] uppercase font-bold text-slate-500 border-b border-slate-700 text-center">
-                        Simulating Protocol on Sample Record (ID: {targetDetails[0][getPkCol()]})
-                    </div>
-                    <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-950 text-slate-400 text-[10px] uppercase">
-                            <tr>
-                                <th className="p-3">Column</th>
-                                <th className="p-3">Sample Data</th>
-                                <th className="p-3">Applied Strategy</th>
-                                <th className="p-3">Result</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-800 font-mono text-xs">
-                            {schema[selectedTable].columns.map((col) => {
-                                const val = targetDetails[0][col.name];
-                                const action = col.suggested_strategy;
-                                return (
-                                    <tr key={col.name} className={action !== 'IGNORE' && action !== 'PRESERVE' ? 'bg-red-900/10' : ''}>
-                                        <td className="p-3 text-slate-400">{col.name}</td>
-                                        <td className="p-3 text-white max-w-xs truncate">{val}</td>
-                                        <td className="p-3">
-                                            {action === 'HASH' && (
-                                                <div className="flex flex-col">
-                                                    <span className="text-[10px] font-bold bg-red-600 text-white px-2 py-1 rounded w-fit">SALTED HASH</span>
-                                                    <span className="text-[9px] text-red-300 mt-1 italic">{col.reason}</span>
-                                                </div>
-                                            )}
-                                            {action === 'EMAIL_MASK' && (
-                                                <div className="flex flex-col">
-                                                    <span className="text-[10px] font-bold bg-blue-600 text-white px-2 py-1 rounded w-fit">EMAIL MASK</span>
-                                                    <span className="text-[9px] text-blue-300 mt-1 italic">{col.reason}</span>
-                                                </div>
-                                            )}
-                                            {action === 'MASK' && (
-                                                <div className="flex flex-col">
-                                                    <span className="text-[10px] font-bold bg-yellow-600 text-white px-2 py-1 rounded w-fit">PARTIAL MASK</span>
-                                                    <span className="text-[9px] text-yellow-300 mt-1 italic">{col.reason}</span>
-                                                </div>
-                                            )}
-                                            {action === 'PRESERVE' && (
-                                                <div className="flex flex-col">
-                                                    <span className="text-[10px] font-bold bg-green-600 text-white px-2 py-1 rounded w-fit">PRESERVE</span>
-                                                    <span className="text-[9px] text-green-300 mt-1 italic">{col.reason}</span>
-                                                </div>
-                                            )}
-                                            {action === 'IGNORE' && <span className="text-[10px] text-slate-600 border border-slate-700 px-2 py-1 rounded">IGNORE</span>}
-                                        </td>
-                                        <td className="p-3">
-                                            {action === 'HASH' && <span className="text-red-400 blur-[2px]">HASH_VAL</span>}
-                                            {action === 'EMAIL_MASK' && <span className="text-blue-400">redacted@gmail.com</span>}
-                                            {action === 'MASK' && <span className="text-yellow-400">***-***-1234</span>}
-                                            {(action === 'PRESERVE' || action === 'IGNORE') && <span className="text-slate-600">NO CHANGE</span>}
-                                        </td>
-                                    </tr>
-                                )
-                            })}
-                        </tbody>
-                    </table>
-                </div>
-
-                <div className="flex gap-4 mt-auto">
-                    <button onClick={() => setStep(2)} className="px-8 py-4 rounded bg-slate-700 hover:bg-slate-600 text-white font-bold">Back</button>
-                    <button onClick={handleExecute} className="px-8 py-4 rounded bg-red-600 hover:bg-red-500 text-white font-bold flex-1 shadow-[0_0_20px_rgba(220,38,38,0.5)]">
-                        COMMIT PROTOCOL
+                <div className="flex gap-4">
+                    <button onClick={() => setStep(2)} className="px-10 py-5 rounded-2xl bg-slate-800 font-bold hover:bg-slate-700 transition-all text-white">Back</button>
+                    <button onClick={handleExecuteProtocol} className="flex-1 py-5 rounded-2xl bg-red-600 font-black text-xl hover:bg-red-500 transition-all shadow-[0_0_40px_rgba(220,38,38,0.3)] uppercase tracking-widest text-white">
+                        Commit Protocol
                     </button>
                 </div>
             </div>
+          ) : step === 3 && (
+            <div className="flex flex-col items-center justify-center h-full text-center">
+                <div className="text-6xl mb-6">⚠️</div>
+                <h2 className="text-2xl font-bold text-white mb-2">Scope Validation Failed</h2>
+                <p className="text-slate-400 max-w-sm">No records matching those IDs were found in the target table.</p>
+                <button onClick={() => setStep(2)} className="mt-8 text-cyan-500 underline">Return to Scope Setup</button>
+            </div>
           )}
 
-          {/* STEP 4: SUCCESS */}
-          {step === 4 && (
-            <div className="text-center py-20 animate-in fade-in zoom-in duration-500">
-              <div className="text-8xl mb-6">🔒</div>
-              <h2 className="text-4xl font-bold text-white mb-2">Protocol Complete</h2>
-              <button onClick={() => {setStep(2); setTargetIds([])}} className="bg-purple-600 px-10 py-4 rounded text-white font-bold shadow-lg mt-8">
-                Next Batch
-              </button>
+          {/* STEP 4: JOB PROGRESS (10/10 Experience) */}
+          {(activeJobId || step === 4) && (
+            <div className="flex flex-col items-center justify-center h-full text-center animate-in fade-in zoom-in duration-500">
+                {jobStatus?.status !== 'completed' && jobStatus?.status !== 'failed' ? (
+                    <>
+                        <div className="relative w-48 h-48 mb-10">
+                            <svg className="w-full h-full transform -rotate-90">
+                                <circle cx="96" cy="96" r="80" stroke="currentColor" strokeWidth="8" fill="transparent" className="text-slate-800" />
+                                <circle cx="96" cy="96" r="80" stroke="currentColor" strokeWidth="8" fill="transparent" 
+                                    strokeDasharray={502} strokeDashoffset={502 - (502 * (jobStatus?.progress || 0)) / 100} 
+                                    className="text-cyan-500 transition-all duration-500 ease-out" strokeLinecap="round" />
+                            </svg>
+                            <div className="absolute inset-0 flex items-center justify-center flex-col">
+                                <span className="text-4xl font-black text-white">{jobStatus?.progress || 0}%</span>
+                                <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Complete</span>
+                            </div>
+                        </div>
+                        <h2 className="text-3xl font-black text-white mb-2 uppercase tracking-tight">Erasing Data Signatures</h2>
+                        <p className="text-slate-500 font-mono text-sm max-w-sm uppercase">Job Status: {jobStatus?.status || 'Queued'}... <br/>Executing AES-SHA256 Polymorphic Hashing.</p>
+                    </>
+                ) : jobStatus?.status === 'failed' ? (
+                    <div>
+                        <div className="text-6xl mb-6">❌</div>
+                        <h2 className="text-3xl font-black text-white mb-2">Protocol Aborted</h2>
+                        <p className="text-red-400 font-mono text-sm mb-10">{jobStatus?.error || "Unknown System Error"}</p>
+                        <button onClick={() => {setStep(2); setActiveJobId(null);}} className="bg-slate-800 text-white px-10 py-4 rounded-2xl font-bold">Try Again</button>
+                    </div>
+                ) : (
+                    <div className="animate-bounce-in">
+                        <div className="w-32 h-32 bg-green-500/20 text-green-500 rounded-full flex items-center justify-center text-6xl mx-auto mb-8 border border-green-500/30">✓</div>
+                        <h2 className="text-5xl font-black text-white mb-4">Protocol Success</h2>
+                        <p className="text-slate-400 mb-10 text-lg">Multi-tenant audit logs updated. Irreversible erasure complete.</p>
+                        <div className="flex gap-4 justify-center">
+                            <button onClick={downloadResults} className="bg-white text-slate-900 px-8 py-4 rounded-2xl font-black hover:bg-cyan-400 transition-all">DOWNLOAD CERTIFICATES</button>
+                            <button onClick={() => {setStep(2); setActiveJobId(null); setJobStatus(null);}} className="bg-slate-800 text-white px-8 py-4 rounded-2xl font-bold hover:bg-slate-700 transition-all">NEW BATCH</button>
+                        </div>
+                    </div>
+                )}
             </div>
           )}
 

@@ -1,67 +1,32 @@
--- 1. THE USER DATA (The Target)
+-- AEGIS MASTER SCHEMA v4.5
+
+-- 1. Users & Clients Table
 CREATE TABLE users (
     user_id SERIAL PRIMARY KEY,
-    full_name TEXT,
-    email TEXT,
-    phone TEXT,
-    status TEXT DEFAULT 'ACTIVE'
-);
-
--- 2. TRANSACTION HISTORY (Must remain after deletion)
-CREATE TABLE orders (
-    order_id SERIAL PRIMARY KEY,
-    user_id INT REFERENCES users(user_id),
-    amount DECIMAL(10,2),
-    shipping_address TEXT -- PII: Needs cleaning
-);
-
--- 3. THE "BRAIN" (Privacy Catalog)
--- This defines HOW we handle specific data types
-CREATE TABLE privacy_catalog (
-    catalog_id SERIAL PRIMARY KEY,
-    table_name TEXT,
-    column_name TEXT,
-    strategy TEXT -- 'HASH', 'REDACT', 'NULLIFY'
-);
-
--- 4. INSERT FAKE DATA
-INSERT INTO users (full_name, email, phone) VALUES 
-('John Wick', 'john@continental.com', '555-0100'),
-('Aneeq','ane@google.com','666-100');
-
-INSERT INTO orders (user_id, amount, shipping_address) VALUES 
-(2, 500.00, '123 Continental Hotel, NY'),
-(1, 1200.00, '123 Continental Hotel, NY');
-
--- 5. CONFIGURE THE RULES
-INSERT INTO privacy_catalog (table_name, column_name, strategy) VALUES 
-('users', 'full_name', 'REDACT'),
-('users', 'email', 'HASH'),
-('users', 'phone', 'NULLIFY'),
-('orders', 'shipping_address', 'REDACT');
-
-CREATE TABLE audit_logs (
-    log_id SERIAL PRIMARY KEY,
-    target_db TEXT,
-    target_table TEXT,
-    target_pk_id INT,
-    columns_cleaned TEXT,
-    executed_at TIMESTAMP DEFAULT NOW(),
-    status TEXT
-);
-
--- 1. Create Admins Table
-CREATE TABLE administrators (
-    admin_id SERIAL PRIMARY KEY,
-    username TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    role TEXT DEFAULT 'SUPER_ADMIN',
+    organization_name TEXT NOT NULL,
+    role TEXT DEFAULT 'CLIENT', -- 'CLIENT' or 'SUPER_ADMIN'
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 2. Insert Default Admin (User: admin, Pass: admin123)
--- Note: This is a BCRYPT hash for 'admin123'
-INSERT INTO administrators (username, password_hash) 
-VALUES ('admin', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxwKc.6IymVFt7H.8/r.m/g.j/O52');
+-- 2. Multi-Tenant Audit Logs
+CREATE TABLE audit_logs (
+    log_id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES users(user_id) ON DELETE CASCADE,
+    target_db TEXT NOT NULL,
+    target_table TEXT NOT NULL,
+    target_pk_id TEXT NOT NULL, -- Changed to TEXT to support UUIDs/Emails/Ints
+    executed_at TIMESTAMP DEFAULT NOW(),
+    status TEXT NOT NULL -- 'SUCCESS', 'FAILED'
+);
 
-select * from audit_logs;
+-- 3. Initial Super Admin (Password: admin123)
+-- Note: In production, change this immediately via the dashboard.
+INSERT INTO users (email, password_hash, organization_name, role) 
+VALUES ('admin@aegis.io', '$2b$12$3IEfsTOuI3RKo0NCfwrINOpuMTtbz8BSWjtObmEfqt4f0KSzyTVaS', 'AEGIS CORE', 'SUPER_ADMIN');
+
+ALTER TABLE users ADD COLUMN accepted_terms BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN terms_accepted_at TIMESTAMP;
+
+select * from users;

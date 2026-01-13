@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from dotenv import load_dotenv
 from fastapi.background import BackgroundTasks
-import tasks
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart

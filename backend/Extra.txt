@@ -40,3 +40,7 @@ Password: npg_g4cLNOHZev9Y
 Host: ep-plain-fire-adlxntu5-pooler.c-2.us-east-1.aws.neon.tech
 Database: neondb
 Requirements: sslmode=require (This confirms we must update the Python code to support SSL).
+
+SMTP Google Password
+App Name: AEGIS engine
+password: xqje wpri rgli aocj

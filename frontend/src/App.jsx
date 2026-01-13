@@ -102,7 +102,7 @@ export default function App() {
     setLoading(false);
   }
 
-  const handleSignup = async (e) => {
+const handleSignup = async (e) => {
    e.preventDefault();
    if (!acceptedPolicy) {
        alert("You must accept the Privacy Policy to proceed.");
@@ -121,15 +121,19 @@ export default function App() {
                accept_privacy_policy: acceptedPolicy 
            })
        });
-       if (!res.ok) {
-           const errorData = await res.json();
-           throw new Error(errorData.detail || "Signup Protocol Rejected");
-       }
-       alert("Account Authorized. Proceed to Login.");
+       const data = await res.json();
+       
+       if (!res.ok) throw new Error(data.detail || "Signup Rejected");
+       
+       // Change this alert to show the email status
+       alert("IDENTITY RECORDED: A verification link has been sent to " + email + ". Please authorize your account via Gmail before logging in.");
+       
        setIsSignup(false); 
-    } catch(err) { alert(err.message); }
+    } catch(err) { 
+        alert(err.message); 
+    }
    setLoading(false);
-  }
+}
 
   // --- ENGINE LOGIC ---
 

@@ -4,6 +4,6 @@ asyncpg
 python-dotenv
 fpdf
 email-validator
-bycrypt
+bcrypt
 python-multipart
 python-jose[cryptography]

@@ -31,7 +31,7 @@ export default function App() {
   const [targetIds, setTargetIds] = useState([]) 
   const [targetDetails, setTargetDetails] = useState([])
   
-  // --- JOB TRACKING STATE (10/10 Architecture) ---
+  // --- JOB TRACKING STATE ---
   const [activeJobId, setActiveJobId] = useState(null)
   const [jobStatus, setJobStatus] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -125,7 +125,6 @@ const handleSignup = async (e) => {
        
        if (!res.ok) throw new Error(data.detail || "Signup Rejected");
        
-       // Change this alert to show the email status
        alert("IDENTITY RECORDED: A verification link has been sent to " + email + ". Please authorize your account via Gmail before logging in.");
        
        setIsSignup(false); 
@@ -457,7 +456,6 @@ if (!token) {
                 <div className="bg-slate-950 rounded-[2rem] border border-slate-800 overflow-hidden flex-grow mb-8 flex flex-col shadow-2xl">
                     <div className="bg-slate-900/50 p-4 text-[10px] uppercase font-black text-slate-500 border-b border-slate-800 flex justify-between">
                         <span>Introspection Engine v4.6 Active</span>
-                        {/* Optional chaining protects against schema or targetDetails missing data */}
                         <span>Sample Record ID: {targetDetails[0]?.[schema?.[selectedTable]?.primary_key] || "N/A"}</span>
                     </div>
                     <div className="overflow-y-auto flex-grow custom-scrollbar">
@@ -517,7 +515,7 @@ if (!token) {
             </div>
           )}
 
-          {/* STEP 4: JOB PROGRESS (10/10 Experience) */}
+          {/* STEP 4: JOB PROGRESS */}
           {(activeJobId || step === 4) && (
             <div className="flex flex-col items-center justify-center h-full text-center animate-in fade-in zoom-in duration-500">
                 {jobStatus?.status !== 'completed' && jobStatus?.status !== 'failed' ? (

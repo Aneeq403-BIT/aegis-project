@@ -44,3 +44,11 @@ Requirements: sslmode=require (This confirms we must update the Python code to s
 SMTP Google Password
 App Name: AEGIS engine
 password: xqje wpri rgli aocj
+
+My online deployed database connection details
+user: neondb_owner
+password: npg_wDmWLOA6Pbt1
+Host: ep-proud-term-ahjm4vgd-pooler.c-3.us-east-1.aws.neon.tech
+Database: aegis_db
+Requirements: /aegis_db?sslmode=require&channel_binding=require' 
+Complete String: 'postgresql://neondb_owner:npg_wDmWLOA6Pbt1@ep-proud-term-ahjm4vgd-pooler.c-3.us-east-1.aws.neon.tech/aegis_db?sslmode=require&channel_binding=require'

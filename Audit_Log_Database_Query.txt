@@ -7,7 +7,11 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL,
     organization_name TEXT NOT NULL,
     role TEXT DEFAULT 'CLIENT', -- 'CLIENT' or 'SUPER_ADMIN'
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+	accepted_terms BOOLEAN DEFAULT FALSE,
+	terms_accepted_at TIMESTAMP,
+	is_verified BOOLEAN DEFAULT FALSE,
+	verification_token TEXT
 );
 
 -- 2. Multi-Tenant Audit Logs
@@ -20,13 +24,3 @@ CREATE TABLE audit_logs (
     executed_at TIMESTAMP DEFAULT NOW(),
     status TEXT NOT NULL -- 'SUCCESS', 'FAILED'
 );
-
--- 3. Initial Super Admin (Password: admin123)
--- Note: In production, change this immediately via the dashboard.
-INSERT INTO users (email, password_hash, organization_name, role) 
-VALUES ('admin@aegis.io', '$2b$12$3IEfsTOuI3RKo0NCfwrINOpuMTtbz8BSWjtObmEfqt4f0KSzyTVaS', 'AEGIS CORE', 'SUPER_ADMIN');
-
-ALTER TABLE users ADD COLUMN accepted_terms BOOLEAN DEFAULT FALSE;
-ALTER TABLE users ADD COLUMN terms_accepted_at TIMESTAMP;
-
-select * from users;
